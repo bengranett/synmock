@@ -1,0 +1,6 @@
+#classy
+numpy
+scipy
+pandas
+pyyaml
+healpy
