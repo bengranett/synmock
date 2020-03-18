@@ -4,7 +4,7 @@ import logging
 import numpy as np
 import healpy
 
-from . import simbox, sphere
+from . import simbox, sphere, timer
 
 default_params = {
     'mask': None,
@@ -84,16 +84,14 @@ class LogNormCat:
             self._mask_exp = sphere.expand_mask(self.params['mask'], theta_grid)
 
         self._init()
+        self._grid_mask = None
+
 
     def _init(self):
         """"""
-        self.delta = None
-        self.galaxy_discrete = None
         self.coord = None
-        self._velocity_field = None
         self.coord_vel = None
         self._skycoord = None
-        self._grid_mask = None
 
     def realize(self):
         """
@@ -132,27 +130,6 @@ class LogNormCat:
         return self.box.velocity_field
 
     @property
-    def galaxy_count(self):
-        """
-        Returns
-        -------
-        TYPE
-            Description
-        """
-        if self.galaxy_discrete is None:
-            if self.params['random']:
-                galaxy = self.grid_mask * self.params['random_factor']
-            else:
-                galaxy = self.grid_mask * (1 + self.density)
-
-            self.galaxy_discrete = np.zeros(galaxy.shape, dtype='i')
-
-            ii = galaxy > 0
-            self.galaxy_discrete[ii] = np.random.poisson(galaxy[ii])
-
-        return self.galaxy_discrete
-
-    @property
     def catalog(self):
         """
         Returns
@@ -161,21 +138,33 @@ class LogNormCat:
             Description
         """
         if self.coord is None:
-            nonzero = np.where(self.galaxy_count > 0)
-            count = self.galaxy_count[nonzero].flatten()
+            with timer.Timer("catalog coord"):
+                if self.params['random']:
+                    galaxy_count = self.grid_mask * self.params['random_factor']
+                else:
+                    galaxy_count = self.grid_mask * (1 + self.density)
 
-            xyz = np.transpose(nonzero) * self.step
+                discrete_count = np.zeros(galaxy_count.shape, dtype='i')
 
-            if not self.params['grid_point_weights']:
+                ii = galaxy_count > 0
+                discrete_count[ii] = np.random.poisson(galaxy_count[ii])
+                galaxy_count = discrete_count
 
-                self.coord = np.repeat(xyz, count, axis=0)
+                nonzero = np.where(galaxy_count > 0)
+                count = galaxy_count[nonzero].flatten()
 
-                # add a random offset to move galaxies off the regular grid points
-                self.coord += np.random.uniform(0, self.step, self.coord.shape)
-                self.weight = 1
-            else:
-                self.coord = xyz
-                self.weight = count
+                xyz = np.transpose(nonzero) * self.step
+
+                if not self.params['grid_point_weights']:
+
+                    self.coord = np.repeat(xyz, count, axis=0)
+
+                    # add a random offset to move galaxies off the regular grid points
+                    self.coord += np.random.uniform(0, self.step, self.coord.shape)
+                    self.weight = 1
+                else:
+                    self.coord = xyz
+                    self.weight = count
 
         return self.coord
 
@@ -194,10 +183,22 @@ class LogNormCat:
         if self.params['random']:
             return 0
         if self.coord_vel is None:
-            # rebin and get the velocity
-            b = np.floor(self.coord / self.step).astype(int)
-            b = tuple(np.transpose(b))
-            self.coord_vel = np.transpose([v[b] for v in self.velocity_field])
+            with timer.Timer("catalog velocity coord"):
+
+                # rebin and get the velocity
+                b = np.floor(self.coord / self.step).astype(int)
+                b = tuple(np.transpose(b))
+
+                coord_vel = np.zeros((len(self.coord), self.params['dim']))
+
+                for axis in range(self.params['dim']):
+                    vel = self.box.velocity_component(axis)
+                    coord_vel[:, axis] = vel[b]
+                    del vel
+
+                self.box.reset()
+
+                self.coord_vel = coord_vel
 
         return self.coord_vel
 
@@ -219,11 +220,12 @@ class LogNormCat:
             boolean array indicating inside or outside the mask
         """
         if self.params['mask'] is not None:
-            pix = healpy.ang2pix(self._nside, ra, dec, lonlat=True, nest=False)
-            if mask is None:
-                mask = self.params['mask']
-            sel = mask[pix] > 0
-            return sel
+            with timer.Timer("mask sel %i"%(len(ra))):
+                pix = healpy.ang2pix(self._nside, ra, dec, lonlat=True, nest=False)
+                if mask is None:
+                    mask = self.params['mask']
+                sel = mask[pix] > 0
+                return sel
         else:
             return True
 
@@ -253,21 +255,22 @@ class LogNormCat:
             return self.nbar_grid
 
         if self._grid_mask is None:
-            center = self.length / 2.
-            ll = [np.arange(self.shape[i]) * self.step[i] for i in range(3)]
-            y, x, z = np.meshgrid(*ll)
-            x = x.flatten() - center[0]
-            y = y.flatten() - center[1]
-            z = z.flatten() - center[2]
-            ra, dec, r = sphere.xyz2lonlat(x,y,z, getr=True)
-            redshift = self.pk_model.redshift_at_comoving_distance(r)
+            with timer.Timer("grid mask"):
+                center = self.length / 2.
+                ll = [np.arange(self.shape[i]) * self.step[i] for i in range(3)]
+                y, x, z = np.meshgrid(*ll)
+                x = x.flatten() - center[0]
+                y = y.flatten() - center[1]
+                z = z.flatten() - center[2]
+                ra, dec, r = sphere.xyz2lonlat(x,y,z, getr=True)
+                redshift = self.pk_model.redshift_at_comoving_distance(r)
 
-            sel = self.mask_sel(ra, dec, self._mask_exp)
-            selfunc = self.selecton_function(redshift[sel])
+                sel = self.mask_sel(ra, dec, self._mask_exp)
+                selfunc = self.selecton_function(redshift[sel])
 
-            self._grid_mask = np.zeros(len(x))
-            self._grid_mask[sel] = selfunc
-            self._grid_mask = self._grid_mask.reshape(self.shape)
+                self._grid_mask = np.zeros(len(x))
+                self._grid_mask[sel] = selfunc
+                self._grid_mask = self._grid_mask.reshape(self.shape)
         return self._grid_mask
 
     @property
@@ -286,30 +289,31 @@ class LogNormCat:
             array containing the sky coordinates and redshift
         """
         if self._skycoord is None:
-            center = self.length / 2.
-            xyz = self.catalog - center
-            x, y, z = np.transpose(xyz)
-            ra, dec, r = sphere.xyz2lonlat(x, y, z, getr=True)
+            with timer.Timer("skycoord"):
+                center = self.length / 2.
+                xyz = self.catalog - center
+                x, y, z = np.transpose(xyz)
+                ra, dec, r = sphere.xyz2lonlat(x, y, z, getr=True)
 
-            if not self.params['random']:
-                vel = self.catalog_velocity
-                norm = np.sqrt(np.sum(xyz * xyz, axis=1))
-                vlos = np.sum(xyz * vel, axis=1) / norm
-
-            if self.params['mask'] is not None:
-                sel = self.mask_sel(ra, dec)
-                ra = ra[sel]
-                dec = dec[sel]
-                r = r[sel]
                 if not self.params['random']:
-                    vlos = vlos[sel]
+                    vel = self.catalog_velocity
+                    norm = np.sqrt(np.sum(xyz * xyz, axis=1))
+                    vlos = np.sum(xyz * vel, axis=1) / norm
 
-            redshift = self.pk_model.redshift_at_comoving_distance(r)
+                if self.params['mask'] is not None:
+                    sel = self.mask_sel(ra, dec)
+                    ra = ra[sel]
+                    dec = dec[sel]
+                    r = r[sel]
+                    if not self.params['random']:
+                        vlos = vlos[sel]
 
-            if self.params['random']:
-                self._skycoord = np.transpose([ra, dec, redshift])
-            else:
-                redshift_s = self.pk_model.redshift_at_comoving_distance(r + vlos)
-                self._skycoord = np.transpose([ra, dec, redshift, redshift_s])
+                redshift = self.pk_model.redshift_at_comoving_distance(r)
+
+                if self.params['random']:
+                    self._skycoord = np.transpose([ra, dec, redshift])
+                else:
+                    redshift_s = self.pk_model.redshift_at_comoving_distance(r + vlos)
+                    self._skycoord = np.transpose([ra, dec, redshift, redshift_s])
 
         return self._skycoord

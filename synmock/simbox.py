@@ -1,8 +1,6 @@
 import logging
 import numpy as np
-import time
-
-from . import fftutils
+from . import timer
 
 
 def inv_logtransform(plog):
@@ -36,11 +34,10 @@ def logtransform(p, return_corrected=False):
     if return_corrected:
         p_corrected = p.copy()
 
-    logging.debug("> Computing log power spectrum ~~~~~~~~~~")
     xi = np.fft.ifftn(p.astype('complex'))
 
-    if not np.all(xi.real>-1):
-        logging.critical("!!!! simbox fatal error with log transform! P(k) amp is too high maybe...")
+    if not np.min(xi.real) > -1:
+        logging.critical("simbox fatal error with log transform! P(k) amp is too high maybe...")
         raise ValueError
 
     logxi = np.log(1 + xi)
@@ -48,24 +45,35 @@ def logtransform(p, return_corrected=False):
     plog.flat[0] = 0
 
     # Set negative modes to 0
-    pmin = plog.min()
-    if pmin < 0:
-        logging.warning("log pk goes negative! %f",pmin)
-        plog[plog<0] = 0
-
-        if return_corrected:
-            # Do the inverse transform to compute the corrected input power spectrum
-            p_corrected = inv_logtransform(plog)
+    plog[plog<0] = 0
 
     if return_corrected:
+        # Do the inverse transform to compute the corrected input power spectrum
+        p_corrected = inv_logtransform(plog)
         return plog, p_corrected
 
     return plog
 
 
+def gofft(grid):
+    """ Forward FFT """
+    with timer.Timer("FFT shape %s time"%str(grid.shape)):
+        n = np.prod(grid.shape)
+        dk = 1./n*np.fft.fftn(grid)
+    return dk
+
+
+def gofftinv(grid):
+    """ inverse FFT """
+    with timer.Timer("inv FFT shape %s time"%str(grid.shape)):
+        n = np.prod(grid.shape)
+        d = n*np.fft.ifftn(grid)
+    return d
+
+
 class SimBox:
     """ """
-    def __init__(self, pk_model, shape, length, lognorm=False):
+    def __init__(self, pk_model, shape, length, lognorm=False, apply_window=False):
         """ Generate Gaussian and lognormal simulations in a box.
 
         Inputs
@@ -87,108 +95,117 @@ class SimBox:
         self.pk_model = pk_model
 
         self.lognorm = lognorm
+        self.apply_window = apply_window
 
-        self._delta = None
         self._pkgrid = None
         self._kgrid = None
         self._k = None
+        self._window = None
+        self.reset()
+
+    def reset(self):
+        """ """
+        self._delta = None
+        self._density_k = None
+        self._velocity_field = None
         self._window = None
 
     @property
     def kgrid(self):
         """ Compute k and mu at grid points. """
         if self._kgrid is None:
-            if self.dim==3:
-                kgrid = fftutils.kgrid3d(self.shape, self.length) # components of k in physical units
-            elif self.dim==2:
-                kgrid = fftutils.kgrid2d(self.shape, self.length)
-            elif self.dim==1:
-                k = fftutils.kgrid1d(self.shape, self.length)
-                kgrid = k,
-            else:
-                logging.critical("Invalid dimension: %s", self.dim)
-                raise Exception("Invalid dimension")
-
-            self._kgrid = kgrid
-
+            with timer.Timer("kgrid time"):
+                kk = []
+                for i in range(self.dim):
+                    kk.append(np.fft.fftfreq(self.shape[i])* 2 * np.pi / self.step[i])
+                ky, kx, kz = np.meshgrid(*kk)
+                self._kgrid = kx, ky, kz
         return self._kgrid
 
     @property
     def k(self):
         if self._k is None:
-            ksq = 0
-            for k in self.kgrid:
-                ksq += k * k
-            self._k = np.sqrt(ksq)
-            self._k.flat[0] = self._k.flat[1]
-            assert np.all(self._k > 0)
+            with timer.Timer("k time"):
+                ksq = 0
+                for k in self.kgrid:
+                    ksq += k * k
+                self._k = np.sqrt(ksq)
+                self._k.flat[0] = self._k.flat[1]
         return self._k
 
     @property
     def pkgrid(self):
         if self._pkgrid is None:
-            p = self.pk_model.get_pk(self.k)
-            p /= self.cell_volume
+            with timer.Timer("pkgrid time"):
+                p = self.pk_model.get_pk(self.k)
+                p /= self.cell_volume
 
-            p.flat[0] = 0
-            p = p.reshape(self.shape)
+                p.flat[0] = 0
+                p = p.reshape(self.shape)
 
-            if self.lognorm:
-                p = logtransform(p)
+                if self.apply_window:
+                    p *= self.window
 
-            # compute variance of the Gaussian field
-            self.xi0 = np.sum(p)/self.n
+                if self.lognorm:
+                    p = logtransform(p)
 
-            logging.debug("Variance of Gaussian field: %f (from pk)",self.xi0)
+                # compute variance of the Gaussian field
+                self.xi0 = np.sum(p)/self.n
 
-            self._pkgrid = p
-            self.S0 = np.sum(self._pkgrid) / self.volume
+                logging.debug("Variance of Gaussian field: %f (from pk)",self.xi0)
+
+                self._pkgrid = p
+                self.S0 = np.sum(self._pkgrid) / self.volume
 
         return self._pkgrid
 
     @property
     def window(self):
         if self._window is None:
-            w = np.ones(self.kgrid[0].shape)
-            for i, k in enumerate(self.kgrid):
-                x = k * self.step[i] / 2
-                ii = x != 0
-                w[ii] *= np.sin(x[ii])/x[ii]
-            self._window = w * w
+            with timer.Timer("Window calculation"):
+                w = np.ones(self.kgrid[0].shape)
+                for i, k in enumerate(self.kgrid):
+                    x = k * self.step[i] / 2
+                    ii = x != 0
+                    w[ii] *= np.sin(x[ii])/x[ii]
+                self._window = w * w
         return self._window
 
     def realize(self):
         """realize a random gaussian field"""
-        self._velocity_field = None
+        self.reset()
 
-        logging.debug("Dreaming of gaussian fields (shape: %s)",self.shape)
-        t0 = time.time()
 
-        # random.uniform returns in [0,1)
-        # so to exclude the 0 case use 1-uniform
-        amp = 1 - np.random.uniform(0, 1, self.n)
+        with timer.Timer("Dreaming of gaussian fields (shape: %s)"%self.shape):
+            # random.uniform returns in [0,1)
+            # so to exclude the 0 case use 1-uniform
+            amp = 1 - np.random.uniform(0, 1, self.n)
 
-        phase = np.random.uniform(0, 2 * np.pi, self.n)
+            phase = np.random.uniform(0, 2 * np.pi, self.n)
 
-        x = np.sqrt(-2*np.log(amp))*np.exp(1j*phase)
-        x = x.reshape(self.shape)
+            x = np.sqrt(-2*np.log(amp))*np.exp(1j*phase)
 
-        grid = np.sqrt(1./self.n*self.pkgrid)*x
+            del amp
+            del phase
 
-        grid.flat[0] = 0
+            x = x.reshape(self.shape)
 
-        t1 = time.time()
-        out = fftutils.gofftinv(grid).real.astype('float')
+            grid = np.sqrt(1./self.n*self.pkgrid)*x
 
-        logging.debug("fft time: %f",time.time()-t1)
-        logging.debug("done, seconds: %f",time.time()-t0)
+            del x
 
-        logging.debug("Gauss field min:%f max:%f mean:%f var:%f",out.min(),out.max(),out.mean(),out.var())
+            grid.flat[0] = 0
 
-        if self.lognorm:
-            self._delta = np.exp(out-self.xi0/2.) - 1
-        else:
-            self._delta = out
+            out = gofftinv(grid).real.astype('float')
+
+            del grid
+
+            logging.debug("Gauss field min:%f max:%f mean:%f var:%f",out.min(),out.max(),out.mean(),out.var())
+
+            if self.lognorm:
+                self._delta = np.exp(out-self.xi0/2.) - 1
+            else:
+                self._delta = out
 
         return self._delta
 
@@ -197,6 +214,22 @@ class SimBox:
         if self._delta is None:
             self._delta = self.realize()
         return self._delta
+
+    @property
+    def density_k(self):
+        if self._density_k is None:
+            with timer.Timer("density k"):
+                f = self.pk_model.params['f']
+                vel_norm = 1j * f / self.k**2 / self.pk_model.params['bias']
+                self._density_k = vel_norm * gofft(self.density)
+                self._density_k.flat[0] = 0
+            del self._delta
+        return self._density_k
+
+    def velocity_component(self, axis=0):
+        """ """
+        return gofftinv(self.density_k * self.kgrid[axis]).real
+
 
     @property
     def velocity_field(self):
@@ -208,14 +241,12 @@ class SimBox:
 
             logging.debug(f"Velocity field parameters z={z}, f={f}, H(z)={H}h km/s/Mpc")
 
-            deltak = fftutils.gofft(self.density)
-
-            self.k.flat[0] = 1 # remove (0,0,0)
+            deltak = gofft(self.density)
 
             vfactor = 1j * f * deltak / self.k**2 / self.pk_model.params['bias']
 
             vfactor.flat[0] = 0
 
-            self._velocity_field = [fftutils.gofftinv(vfactor * kk).real for kk in self.kgrid]
+            self._velocity_field = [gofftinv(vfactor * kk).real for kk in self.kgrid]
 
         return self._velocity_field

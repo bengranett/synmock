@@ -9,7 +9,7 @@ from scipy import interpolate
 import healpy
 
 from . import __version__
-from . import model, lncat
+from . import model, lncat, timer
 
 
 default_params = {
@@ -57,6 +57,7 @@ def write_header(params, file):
 
 def write(cats, path, params, model, labels=None):
     """ Write catalog to a file """
+    logging.info(f"Writing catalog with size {cats[0].shape[0]} to {path}")
 
     params['A_s'] = model.params['A_s']
     params['sigma8'] = model.params['sigma8']
@@ -105,18 +106,19 @@ def go_randoms(M, params, mask=None, nofz=None):
     if os.path.exists(path):
         return
 
-    L = lncat.LogNormCat(
-        M,
-        random=True,
-        random_factor=params['randoms_factor'],
-        mask=mask,
-        nofz=nofz,
-        box_length=params['box'],
-        cell_size=params['cellsize'],
-        nbar=params['nbar']
-    )
+    with timer.Timer("go randoms time"):
+        L = lncat.LogNormCat(
+            M,
+            random=True,
+            random_factor=params['randoms_factor'],
+            mask=mask,
+            nofz=nofz,
+            box_length=params['box'],
+            cell_size=params['cellsize'],
+            nbar=params['nbar']
+        )
 
-    write((L.skycoord,), path, params, M, labels=('ra','dec','z'))
+        write((L.skycoord,), path, params, M, labels=('ra','dec','z'))
 
 
 def go(params):
@@ -145,34 +147,33 @@ def go(params):
     stop_flag = False
 
     for loop in range(params['nreal']):
-        params['seed'] = seeds.pop()
+        with timer.Timer("Realization time"):
+            params['seed'] = seeds.pop()
 
-        index = params['start'] + loop
-        try:
-            path = params['out']%index
-        except:
-            path = params['out']
-            stop_flag = True
+            index = params['start'] + loop
+            try:
+                path = params['out']%index
+            except:
+                path = params['out']
+                stop_flag = True
 
-        if os.path.exists(path):
-            continue
+            if os.path.exists(path):
+                continue
 
-        logging.info(f"Starting realization {loop+1} of {params['nreal']}")
+            logging.info(f"Starting realization {loop+1} of {params['nreal']}")
 
-        np.random.seed(params['seed'])
+            np.random.seed(params['seed'])
 
-        L.realize()
+            L.realize()
 
-        logging.info(f"Writing catalog with size {L.catalog.shape[0]} to {path}")
+            if not params['sky']:
+                write((L.catalog, L.catalog_velocity), path, params, M, labels=('x','y','z','vx','vy','vz'))
+            else:
+                write((L.skycoord,), path, params, M, labels=('ra','dec','z','z_s'))
 
-        if not params['sky']:
-            write((L.catalog, L.catalog_velocity), path, params, M, labels=('x','y','z','vx','vy','vz'))
-        else:
-            write((L.skycoord,), path, params, M, labels=('ra','dec','z','z_s'))
-
-        if stop_flag:
-            logging.warning("Stopping early")
-            break
+            if stop_flag:
+                logging.warning("Stopping early")
+                break
 
     logging.info("Done")
 
@@ -275,8 +276,8 @@ def main():
     for key, value in params.items():
         logging.info(f"{key} = {value}")
 
-
-    go(params)
+    with timer.Timer("Run time"):
+        go(params)
 
 
 if __name__ == "__main__":
