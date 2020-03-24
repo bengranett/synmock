@@ -10,6 +10,8 @@ Welcome to Synmock's documentation!
    :maxdepth: 2
    :caption: Contents:
 
+   synmock
+
 
 
 Indices and tables
