@@ -41,6 +41,8 @@ default_params = {
     'randoms_factor': 10,
     'randoms_file': 'out/randoms.txt',
 
+    'mpk': None,
+
     'seed': None,
 
     'verbose': 1,
@@ -236,6 +238,8 @@ def main():
 
     parser.add_argument('--randoms_file', type=str,
                         help='Output file for randoms'),
+
+    parser.add_argument('--mpk', type=str, help='File with tabulated matter power spectrum')
 
     parser.add_argument('--seed', type=int, help='Random seed'),
 

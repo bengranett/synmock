@@ -27,6 +27,7 @@ params = {
     'logzmax': 1,
     'logzmin': 0,
     'logzsteps': 1000,
+    'mpk': None
 }
 
 
@@ -44,6 +45,18 @@ class ModelPk(object):
         self._cosmo = None
         self._redshift_func = None
         self._logpk_func = None
+
+        if self.params['mpk'] is not None:
+            self.load_pk_from_file(self.params['mpk'])
+
+    def load_pk_from_file(self, path):
+        """ """
+        k, pk = np.loadtxt(path, unpack=True)
+        pk *= self.params['bias']**2
+        lk = np.log(k)
+        lpk = np.log(pk)
+        self._logpk_func = interpolate.interp1d(lk, lpk, bounds_error=False, fill_value=(0,0))
+
 
     def set(self, **param_dict):
         """ """
