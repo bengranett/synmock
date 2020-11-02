@@ -51,12 +51,13 @@ class ModelPk(object):
 
     def load_pk_from_file(self, path):
         """ """
+        self.logger.info(f"Loading matter power spectrum from file {path}")
         k, pk = np.loadtxt(path, unpack=True)
+        self.logger.info(f"min k: {k.min()}, max k: {k.max}, steps {len(k)}")
         pk *= self.params['bias']**2
         lk = np.log(k)
         lpk = np.log(pk)
         self._logpk_func = interpolate.interp1d(lk, lpk, bounds_error=False, fill_value=(0,0))
-
 
     def set(self, **param_dict):
         """ """
@@ -81,7 +82,7 @@ class ModelPk(object):
             self._cosmo = Class()
             self._cosmo.set(self.class_params)
 
-            self.logger.info("Computing power spectrum with Class code")
+            self.logger.info("Initializing Class")
             self._cosmo.compute()
 
             if self.params['fix_sigma8']:
@@ -109,6 +110,8 @@ class ModelPk(object):
 
     def class_pk(self, k):
         """ """
+        self.logger.info("Computing power spectrum with Class")
+
         z = np.array([self.class_params['z_pk']]).astype('d')
 
         shape = k.shape
