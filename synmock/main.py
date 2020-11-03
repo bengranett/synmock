@@ -48,7 +48,7 @@ default_params = {
     'verbose': 1,
 }
 
-params_to_write = ('h', 'Omega_cdm', 'Omega_b', 'sigma8', 'A_s', 'n_s', 'non_linear', 'P_k_max_h/Mpc', 'bias', 'z_pk', 'box', 'cellsize', 'mask', 'nofz', 'randoms', 'randoms_factor', 'seed')
+params_to_write = ('mpk', 'h', 'Omega_cdm', 'Omega_b', 'sigma8', 'A_s', 'n_s', 'non_linear', 'P_k_max_h/Mpc', 'bias', 'z_pk', 'box', 'cellsize', 'mask', 'nofz', 'randoms', 'randoms_factor', 'seed')
 
 def write_header(params, file):
     """ """
@@ -61,7 +61,8 @@ def write(cats, path, params, model, labels=None):
     """ Write catalog to a file """
     logging.info(f"Writing catalog with size {cats[0].shape[0]} to {path}")
 
-    params['A_s'] = model.params['A_s']
+    if 'A_s' in model.params:
+        params['A_s'] = model.params['A_s']
     params['sigma8'] = model.params['sigma8']
 
     table = np.hstack(cats)

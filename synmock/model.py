@@ -53,7 +53,7 @@ class ModelPk(object):
         """ """
         self.logger.info(f"Loading matter power spectrum from file {path}")
         k, pk = np.loadtxt(path, unpack=True)
-        self.logger.info(f"min k: {k.min()}, max k: {k.max}, steps {len(k)}")
+        self.logger.info(f"min k: {k.min()}, max k: {k.max()}, steps {len(k)}")
         pk *= self.params['bias']**2
         lk = np.log(k)
         lpk = np.log(pk)
