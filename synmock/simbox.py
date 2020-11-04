@@ -92,6 +92,8 @@ class SimBox:
         self.n = np.prod(shape)
         self.cell_volume = self.volume * 1. / self.n
 
+        # ensure that class is initialized
+        self.cosmo = pk_model.cosmo
         self.pk_model = pk_model
 
         self.lognorm = lognorm
@@ -229,7 +231,6 @@ class SimBox:
     def velocity_component(self, axis=0):
         """ """
         return gofftinv(self.density_k * self.kgrid[axis]).real
-
 
     @property
     def velocity_field(self):
