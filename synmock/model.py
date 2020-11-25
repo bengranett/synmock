@@ -155,7 +155,12 @@ class ModelPk(object):
 
     def redshift_at_comoving_distance(self, r):
         """ """
-        return 10**self.redshift_func(r) - 1
+        try:
+            z = 10**self.redshift_func(r) - 1
+        except ValueError:
+            self.logger.error(f"r min {r.min()} max {r.max()}", file=sys.stderr)
+            raise
+        return z
 
     @property
     def redshift_func(self):
