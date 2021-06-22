@@ -120,8 +120,7 @@ class SimBox:
                 kk = []
                 for i in range(self.dim):
                     kk.append(np.fft.fftfreq(self.shape[i])* 2 * np.pi / self.step[i])
-                ky, kx, kz = np.meshgrid(*kk)
-                self._kgrid = kx, ky, kz
+                self._kgrid = np.meshgrid(*kk)
         return self._kgrid
 
     @property
@@ -178,7 +177,7 @@ class SimBox:
         self.reset()
 
 
-        with timer.Timer("Dreaming of gaussian fields (shape: %s)"%self.shape):
+        with timer.Timer("Dreaming of gaussian fields (shape: %s)"%str(self.shape)):
             # random.uniform returns in [0,1)
             # so to exclude the 0 case use 1-uniform
             amp = 1 - np.random.uniform(0, 1, self.n)
